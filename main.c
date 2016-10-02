@@ -1,212 +1,73 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
 #include <errno.h>
-#include <sys/socket.h>
-#include <sys/un.h>
+#include <sys/mman.h>
+
+#include "uthash.h"
 
 #include "rpc-c.h"
 
 const int request_count = 1;
 
-int read_full(int fd, void *buf, int len) {
-        int readed = 0;
-        int ret;
+const size_t SAMPLE_SIZE = 100 * 1024 * 1024;
 
-        while (readed < len) {
-                ret = read(fd, buf + readed, len - readed);
-                if (ret < 0) {
-                        return ret;
-                }
-                readed += ret;
-        }
-        return readed;
-}
-
-int write_full(int fd, void *buf, int len) {
-        int wrote = 0;
-        int ret;
-
-        while (wrote < len) {
-                ret = write(fd, buf + wrote, len - wrote);
-                if (ret < 0) {
-                        return ret;
-                }
-                wrote += ret;
-        }
-        return wrote;
-}
-
-int send_request(struct connection *conn, struct Message *req) {
-        int n;
-
-        n = write_full(conn->fd, &req->Header.Seq, sizeof(req->Header.Seq));
-        if (n != sizeof(req->Header.Seq)) {
-                fprintf(stderr, "fail to write seq");
-		return -EINVAL;
-        }
-        n = write_full(conn->fd, &req->Header.Type, sizeof(req->Header.Type));
-        if (n != sizeof(req->Header.Type)) {
-                fprintf(stderr, "fail to write type");
-		return -EINVAL;
-        }
-        n = write_full(conn->fd, &req->Header.Offset, sizeof(req->Header.Offset));
-        if (n != sizeof(req->Header.Offset)) {
-                fprintf(stderr, "fail to write offset");
-		return -EINVAL;
-        }
-        n = write_full(conn->fd, &req->Header.DataLength, sizeof(req->Header.DataLength));
-        if (n != sizeof(req->Header.DataLength)) {
-                fprintf(stderr, "fail to write datalength");
-		return -EINVAL;
-        }
-	if (req->Header.DataLength != 0) {
-		n = write_full(conn->fd, req->Data, req->Header.DataLength);
-		if (n != req->Header.DataLength) {
-			fprintf(stderr, "fail to write data");
-			return -EINVAL;
-		}
-	}
-        return 0;
-}
-
-int receive_response(struct connection *conn, struct Message *resp) {
-	void *buf;
-	int n;
-       
-	n = read_full(conn->fd, &resp->Header.Seq, sizeof(resp->Header.Seq));
-        if (n != sizeof(resp->Header.Seq)) {
-                fprintf(stderr, "fail to write seq");
-		return -EINVAL;
-        }
-        n = read_full(conn->fd, &resp->Header.Type, sizeof(resp->Header.Type));
-        if (n != sizeof(resp->Header.Type)) {
-                fprintf(stderr, "fail to read type");
-		return -EINVAL;
-        }
-        n = read_full(conn->fd, &resp->Header.Offset, sizeof(resp->Header.Offset));
-        if (n != sizeof(resp->Header.Offset)) {
-                fprintf(stderr, "fail to read offset");
-		return -EINVAL;
-        }
-        n = read_full(conn->fd, &resp->Header.DataLength, sizeof(resp->Header.DataLength));
-        if (n != sizeof(resp->Header.DataLength)) {
-                fprintf(stderr, "fail to read datalength");
-		return -EINVAL;
-        }
-
-	if (resp->Header.Type != TypeResponse) {
-		fprintf(stderr, "Invalid response received");
-		return -EINVAL;
-	}
-
-	if (resp->Header.DataLength > 0) {
-		resp->Data = malloc(resp->Header.DataLength);
-		n = read_full(conn->fd, resp->Data, resp->Header.DataLength);
-		if (n != resp->Header.DataLength) {
-			free(resp->Data);
-			return -EINVAL;
-		}
-	}
-	return 0;
-}
-
-void* response_process(void *arg) {
-        struct connection *conn = arg;
-        struct Message *resp;
-        int ret = 0;
-
-        printf("response thread ready\n");
-	resp = malloc(sizeof(struct Message));
-	ret = receive_response(conn, resp);
-        while (ret == 0) {
-                printf("Received size %d, %s\n", resp->Header.DataLength, (char *)resp->Data);
-                free(resp->Data);
-                free(resp);
-                ret = receive_response(conn, resp);
-        }
-        if (ret != 0) {
-                fprintf(stderr, "Fail to receive response");
-        }
-}
-
-void start_processing(struct connection *conn) {
-        int rc;
-
-        rc = pthread_create(&conn->response_thread, NULL, &response_process, conn);
-        if (rc < 0) {
-                perror("Fail to create response thread");
-                exit(-1);
-        }
-}
-
-int new_seq(struct connection *conn) {
-        return __sync_fetch_and_add(&conn->seq, 1);
-}
-
-int send_requests(struct connection *conn, int request_size, int queue_depth) {
-        const char *buf = "Request";
+int start_test(struct connection *conn, int request_size, int queue_depth) {
         int rc = 0;
+        int i, request_count;
 
-        printf("request thread ready\n");
-        for (int i = 0; i < request_count; i ++) {
-                struct Message *req = malloc(sizeof(struct Message));
-                req->Header.Seq = new_seq(conn);
-                req->Header.Type = TypeWrite;
-                req->Header.Offset = 0;
-                req->Header.DataLength = strlen(buf) + 1;
-                req->Data = malloc(req->Header.DataLength);
-                memcpy(req->Data, buf, req->Header.DataLength);
-                printf("about to send request %s\n", buf);
-                rc = send_request(conn, req);
-                printf("request sent\n");
-                if (rc < 0) {
-                        fprintf(stderr, "Fail to send request");
-                }
+        char *buf;
+        void *tmpbuf = malloc(request_size);
 
-                free(req->Data);
-                free(req);
+        if (SAMPLE_SIZE & request_size != 0) {
+                fprintf(stderr, "Request_size if not aligned with SAMPLE_SIZE!\n");
+                exit(-1);
         }
-        printf("all requests sent\n");
-}
+        request_count = SAMPLE_SIZE / request_size;
 
-struct connection *new_connection(char *socket_path) {
-        struct sockaddr_un addr;
-        int fd, rc = 0;
-        struct connection *conn = NULL;
-
-        fd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (fd == -1) {
-                perror("socket error");
+        buf = mmap(NULL, SAMPLE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (buf == (void *)-1) {
+                perror("Cannot allocate enough memory");
                 exit(-1);
         }
 
-        memset(&addr, 0, sizeof(addr));
-        addr.sun_family = AF_UNIX;
-        if (strlen(socket_path) >= 108) {
-                fprintf(stderr, "socket path is too long, more than 108 characters");
-                exit(-EINVAL);
+        for (i = 0; i < SAMPLE_SIZE; i ++) {
+                buf[i] = rand() % 26 + 'a';
         }
 
-        strncpy(addr.sun_path, socket_path, strlen(socket_path));
+        printf("Sample memory generated\n");
 
-        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
-                perror("connect error");
-                exit(-EFAULT);
+        // We're going to write the whole thing to server(which store it in
+        // memory), then read from it.
+        for (i = 0; i < request_count; i ++) {
+                int rc, offset = i * request_size;
+
+//                printf("Write %d at %d\n", request_size, offset);
+                rc = write_at(conn, buf + offset, request_size, offset);
+                if (rc < 0) {
+                        fprintf(stderr, "Fail to complete write for %d\n", offset);
+                        return -EFAULT;
+                }
         }
 
-        conn = malloc(sizeof(struct connection));
-        conn->fd = fd;
-        conn->seq = 0;
-        conn->msg_table = NULL;
-        //conn->table_mutex = PTHREAD_MUTEX_INITIALIZER;
-        return conn;
-}
+        for (i = 0; i < request_count; i ++) {
+                int rc, offset = i * request_size;
 
-int free_connection(struct connection *conn) {
-        free(conn);
+                //printf("Read %d at %d\n", request_size, offset);
+
+                rc = read_at(conn, tmpbuf, request_size, offset);
+                if (rc < 0) {
+                        fprintf(stderr, "Fail to complete read for %d\n", offset);
+                        return -EFAULT;
+                }
+
+                if (memcmp(tmpbuf, buf + offset, request_size) != 0) {
+                        fprintf(stderr, "Inconsistency found at %d!\n", offset);
+                        return -EFAULT;
+                }
+        }
+        printf("Done\n");
 }
 
 int main(int argc, char *argv[])
@@ -246,9 +107,9 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "cannot estibalish connection");
         }
 
-        start_processing(conn);
+        start_response_processing(conn);
 
-        send_requests(conn, request_size, queue_depth);
+        start_test(conn, request_size, queue_depth);
 
         rc = pthread_join(conn->response_thread, NULL);
         if (rc < 0) {
