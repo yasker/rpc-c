@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 
 #include "uthash.h"
 
@@ -19,6 +20,10 @@ int start_test(struct connection *conn, int request_size, int queue_depth) {
 
         char *buf;
         void *tmpbuf = malloc(request_size);
+
+        struct timespec start, read_stop, write_stop;
+        uint32_t delta_write_ms, delta_read_ms;
+        float write_bw, read_bw;
 
         if (SAMPLE_SIZE & request_size != 0) {
                 fprintf(stderr, "Request_size if not aligned with SAMPLE_SIZE!\n");
@@ -38,6 +43,7 @@ int start_test(struct connection *conn, int request_size, int queue_depth) {
 
         printf("Sample memory generated\n");
 
+        clock_gettime(CLOCK_MONOTONIC_RAW, &start);
         // We're going to write the whole thing to server(which store it in
         // memory), then read from it.
         for (i = 0; i < request_count; i ++) {
@@ -50,6 +56,9 @@ int start_test(struct connection *conn, int request_size, int queue_depth) {
                         return -EFAULT;
                 }
         }
+
+        clock_gettime(CLOCK_MONOTONIC_RAW, &write_stop);
+        printf("Write done\n");
 
         for (i = 0; i < request_count; i ++) {
                 int rc, offset = i * request_size;
@@ -67,7 +76,17 @@ int start_test(struct connection *conn, int request_size, int queue_depth) {
                         return -EFAULT;
                 }
         }
-        printf("Done\n");
+        clock_gettime(CLOCK_MONOTONIC_RAW, &read_stop);
+        printf("Read done\n");
+
+        delta_write_ms = (write_stop.tv_sec - start.tv_sec) * 1E3 + (write_stop.tv_nsec - start.tv_nsec) / 1E6;
+        delta_read_ms = (read_stop.tv_sec - start.tv_sec) * 1E3 + (read_stop.tv_nsec - start.tv_nsec) / 1E6;
+        write_bw = (SAMPLE_SIZE / 1024 / 1024) / (delta_write_ms / 1E3);
+        read_bw = (SAMPLE_SIZE / 1024 / 1024) / (delta_read_ms / 1E3);
+        printf("Write done in %d ms\n", delta_write_ms);
+        printf("Write bandwidth is %.2f M/s\n", write_bw);
+        printf("Read done in %d ms\n", delta_read_ms);
+        printf("Read bandwidth is %.2f M/s\n", read_bw);
 }
 
 int main(int argc, char *argv[])
