@@ -1,69 +1,13 @@
 #include <stdio.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
-#include "rpc-c.h"
+#include "longhorn-rpc-client.h"
+#include "longhorn-rpc-protocol.h"
 
-int read_full(int fd, void *buf, int len) {
-        int readed = 0;
-        int ret;
-
-        while (readed < len) {
-                ret = read(fd, buf + readed, len - readed);
-                if (ret < 0) {
-                        return ret;
-                }
-                readed += ret;
-        }
-        return readed;
-}
-
-int write_full(int fd, void *buf, int len) {
-        int wrote = 0;
-        int ret;
-
-        while (wrote < len) {
-                ret = write(fd, buf + wrote, len - wrote);
-                if (ret < 0) {
-                        return ret;
-                }
-                wrote += ret;
-        }
-        return wrote;
-}
-
-int send_msg(int fd, struct Message *msg) {
-        int n = 0;
-
-        n = write_full(fd, &msg->Seq, sizeof(msg->Seq));
-        if (n != sizeof(msg->Seq)) {
-                fprintf(stderr, "fail to write seq");
-                return -EINVAL;
-        }
-        n = write_full(fd, &msg->Type, sizeof(msg->Type));
-        if (n != sizeof(msg->Type)) {
-                fprintf(stderr, "fail to write type");
-                return -EINVAL;
-        }
-        n = write_full(fd, &msg->Offset, sizeof(msg->Offset));
-        if (n != sizeof(msg->Offset)) {
-                fprintf(stderr, "fail to write offset");
-                return -EINVAL;
-        }
-        n = write_full(fd, &msg->DataLength, sizeof(msg->DataLength));
-        if (n != sizeof(msg->DataLength)) {
-                fprintf(stderr, "fail to write datalength");
-                return -EINVAL;
-        }
-	if (msg->DataLength != 0) {
-		n = write_full(fd, msg->Data, msg->DataLength);
-		if (n != msg->DataLength) {
-			fprintf(stderr, "fail to write data");
-                        return -EINVAL;
-		}
-	}
-        return 0;
-}
-
-int send_request(struct connection *conn, struct Message *req) {
+int send_request(struct client_connection *conn, struct Message *req) {
         int rc = 0;
 
         pthread_mutex_lock(&conn->mutex);
@@ -72,59 +16,7 @@ int send_request(struct connection *conn, struct Message *req) {
         return rc;
 }
 
-int receive_msg(int fd, struct Message *msg) {
-	void *buf;
-	int n;
-
-        // There is only one thread reading the response, and socket is
-        // full-duplex, so no need to lock
-	n = read_full(fd, &msg->Seq, sizeof(msg->Seq));
-        if (n != sizeof(msg->Seq)) {
-                fprintf(stderr, "fail to write seq");
-		return -EINVAL;
-        }
-        n = read_full(fd, &msg->Type, sizeof(msg->Type));
-        if (n != sizeof(msg->Type)) {
-                fprintf(stderr, "fail to read type");
-		return -EINVAL;
-        }
-        n = read_full(fd, &msg->Offset, sizeof(msg->Offset));
-        if (n != sizeof(msg->Offset)) {
-                fprintf(stderr, "fail to read offset");
-		return -EINVAL;
-        }
-        n = read_full(fd, &msg->DataLength, sizeof(msg->DataLength));
-        if (n != sizeof(msg->DataLength)) {
-                fprintf(stderr, "fail to read datalength");
-		return -EINVAL;
-        }
-
-	if (msg->Type != TypeResponse) {
-		fprintf(stderr, "Invalid response received");
-		return -EINVAL;
-	}
-
-        //printf("response: seq %d, type %d, offset %ld, length %d\n",
-                        //msg->Seq, msg->Type, msg->Offset, msg->DataLength);
-
-	if (msg->DataLength > 0) {
-		msg->Data = malloc(msg->DataLength);
-                if (msg->Data == NULL) {
-                        perror("cannot allocate memory for data");
-                        return -EINVAL;
-                }
-		n = read_full(fd, msg->Data, msg->DataLength);
-		if (n != msg->DataLength) {
-                        fprintf(stderr, "Cannot read full from fd, %d vs %d\n",
-                                msg->DataLength, n);
-			free(msg->Data);
-			return -EINVAL;
-		}
-	}
-	return 0;
-}
-
-int receive_response(struct connection *conn, struct Message *resp) {
+int receive_response(struct client_connection *conn, struct Message *resp) {
         int rc = 0;
 
         rc = receive_msg(conn->fd, resp);
@@ -132,7 +24,7 @@ int receive_response(struct connection *conn, struct Message *resp) {
 }
 
 void* response_process(void *arg) {
-        struct connection *conn = arg;
+        struct client_connection *conn = arg;
         struct Message *req, *resp;
         int ret = 0;
 
@@ -178,7 +70,7 @@ void* response_process(void *arg) {
         }
 }
 
-void start_response_processing(struct connection *conn) {
+void start_response_processing(struct client_connection *conn) {
         int rc;
 
         rc = pthread_create(&conn->response_thread, NULL, &response_process, conn);
@@ -188,18 +80,18 @@ void start_response_processing(struct connection *conn) {
         }
 }
 
-int new_seq(struct connection *conn) {
+int new_seq(struct client_connection *conn) {
         return __sync_fetch_and_add(&conn->seq, 1);
 }
 
-int process_request(struct connection *conn, void *buf, size_t count, off_t offset, 
+int process_request(struct client_connection *conn, void *buf, size_t count, off_t offset, 
                 uint32_t type) {
         struct Message *req = malloc(sizeof(struct Message));
         int rc = 0;
 
         if (req == NULL) {
-            perror("cannot allocate memory for req");
-            return -EINVAL;
+                perror("cannot allocate memory for req");
+                return -EINVAL;
         }
 
         if (type != TypeRead && type != TypeWrite) {
@@ -248,18 +140,18 @@ out:
         return rc;
 }
 
-int read_at(struct connection *conn, void *buf, size_t count, off_t offset) {
+int read_at(struct client_connection *conn, void *buf, size_t count, off_t offset) {
         process_request(conn, buf, count, offset, TypeRead);
 }
 
-int write_at(struct connection *conn, void *buf, size_t count, off_t offset) {
+int write_at(struct client_connection *conn, void *buf, size_t count, off_t offset) {
         process_request(conn, buf, count, offset, TypeWrite);
 }
 
-struct connection *new_connection(char *socket_path) {
+struct client_connection *new_client_connection(char *socket_path) {
         struct sockaddr_un addr;
         int fd, rc = 0;
-        struct connection *conn = NULL;
+        struct client_connection *conn = NULL;
 
         fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (fd == -1) {
@@ -281,7 +173,7 @@ struct connection *new_connection(char *socket_path) {
                 exit(-EFAULT);
         }
 
-        conn = malloc(sizeof(struct connection));
+        conn = malloc(sizeof(struct client_connection));
         if (conn == NULL) {
             perror("cannot allocate memory for conn");
             return NULL;
@@ -299,6 +191,6 @@ struct connection *new_connection(char *socket_path) {
         return conn;
 }
 
-int free_connection(struct connection *conn) {
+int free_client_connection(struct client_connection *conn) {
         free(conn);
 }

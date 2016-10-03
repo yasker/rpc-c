@@ -8,13 +8,16 @@
 
 #include "uthash.h"
 
-#include "rpc-c.h"
+#include "longhorn-rpc-client.h"
+#include "longhorn-rpc-server.h"
 
 const int request_count = 1;
 
 const size_t SAMPLE_SIZE = 100 * 1024 * 1024;
 
-int start_test(struct connection *conn, int request_size, int queue_depth) {
+static void *server_buf;
+
+int start_test(struct client_connection *conn, int request_size, int queue_depth) {
         int rc = 0;
         int i, request_count;
 
@@ -89,15 +92,37 @@ int start_test(struct connection *conn, int request_size, int queue_depth) {
         printf("Read bandwidth is %.2f M/s\n", read_bw);
 }
 
+int server_read_at(void *buf, size_t count, off_t offset) {
+        if (offset + count > SAMPLE_SIZE) {
+                return -EINVAL;
+        }
+        memcpy(buf, server_buf + offset, count);
+        return 0;
+}
+
+int server_write_at(void *buf, size_t count, off_t offset) {
+        if (offset + count > SAMPLE_SIZE) {
+                return -EINVAL;
+        }
+        memcpy(server_buf + offset, buf, count);
+        return 0;
+}
+
+static struct handler_callbacks cbs = {
+        .read_at = server_read_at,
+        .write_at = server_write_at,
+};
+
 int main(int argc, char *argv[])
 {
         int request_size = 4096;
         char *socket_path = NULL;
         int queue_depth = 128;
+        int client = 0;
 	int c, rc = 0;
-        struct connection *conn;
+        struct client_connection *conn;
 
-        while ((c = getopt(argc, argv, "r:q:s:")) != -1) {
+        while ((c = getopt(argc, argv, "r:q:s:c")) != -1) {
                 switch (c) {
                 case 'r':
                         request_size = atoi(optarg);
@@ -108,6 +133,9 @@ int main(int argc, char *argv[])
                 case 's':
                         socket_path = malloc(strlen(optarg) + 1);
                         strcpy(socket_path, optarg);
+			break;
+                case 'c':
+                        client = 1;
 			break;
                 default:
                         fprintf(stderr, "Cannot understand command\n");
@@ -121,18 +149,31 @@ int main(int argc, char *argv[])
 	printf("Socket %s, request %d, queue depth %d\n", socket_path,
 			request_size, queue_depth);
 
-        conn = new_connection(socket_path);
-        if (conn == NULL) {
-                fprintf(stderr, "cannot estibalish connection");
-        }
+        if (client) {
+                conn = new_client_connection(socket_path);
+                if (conn == NULL) {
+                        fprintf(stderr, "cannot estibalish connection");
+                }
 
-        start_response_processing(conn);
+                start_response_processing(conn);
 
-        start_test(conn, request_size, queue_depth);
+                start_test(conn, request_size, queue_depth);
 
-        rc = pthread_join(conn->response_thread, NULL);
-        if (rc < 0) {
-                perror("Fail to wait for response thread to exit");
+                rc = pthread_join(conn->response_thread, NULL);
+                if (rc < 0) {
+                        perror("Fail to wait for response thread to exit");
+                }
+        } else {
+                unlink(socket_path);
+
+                server_buf = mmap(NULL, SAMPLE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                if (server_buf == (void *)-1) {
+                        perror("Cannot allocate enough memory");
+                        exit(-1);
+                }
+                bzero(server_buf, SAMPLE_SIZE);
+
+                start_server(socket_path, &cbs);
         }
         return 0;
 }
