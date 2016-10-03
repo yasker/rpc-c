@@ -30,97 +30,105 @@ int write_full(int fd, void *buf, int len) {
         return wrote;
 }
 
-int send_request(struct connection *conn, struct Message *req) {
-        int n, rc = 0;
+int send_msg(int fd, struct Message *msg) {
+        int n = 0;
 
-        pthread_mutex_lock(&conn->mutex);
-        n = write_full(conn->fd, &req->Seq, sizeof(req->Seq));
-        if (n != sizeof(req->Seq)) {
+        n = write_full(fd, &msg->Seq, sizeof(msg->Seq));
+        if (n != sizeof(msg->Seq)) {
                 fprintf(stderr, "fail to write seq");
-                rc = -EINVAL;
-                goto out;
+                return -EINVAL;
         }
-        n = write_full(conn->fd, &req->Type, sizeof(req->Type));
-        if (n != sizeof(req->Type)) {
+        n = write_full(fd, &msg->Type, sizeof(msg->Type));
+        if (n != sizeof(msg->Type)) {
                 fprintf(stderr, "fail to write type");
-                rc = -EINVAL;
-                goto out;
+                return -EINVAL;
         }
-        n = write_full(conn->fd, &req->Offset, sizeof(req->Offset));
-        if (n != sizeof(req->Offset)) {
+        n = write_full(fd, &msg->Offset, sizeof(msg->Offset));
+        if (n != sizeof(msg->Offset)) {
                 fprintf(stderr, "fail to write offset");
-                rc = -EINVAL;
-                goto out;
+                return -EINVAL;
         }
-        n = write_full(conn->fd, &req->DataLength, sizeof(req->DataLength));
-        if (n != sizeof(req->DataLength)) {
+        n = write_full(fd, &msg->DataLength, sizeof(msg->DataLength));
+        if (n != sizeof(msg->DataLength)) {
                 fprintf(stderr, "fail to write datalength");
-                rc = -EINVAL;
-                goto out;
+                return -EINVAL;
         }
-	if (req->DataLength != 0) {
-		n = write_full(conn->fd, req->Data, req->DataLength);
-		if (n != req->DataLength) {
+	if (msg->DataLength != 0) {
+		n = write_full(fd, msg->Data, msg->DataLength);
+		if (n != msg->DataLength) {
 			fprintf(stderr, "fail to write data");
-                        rc = -EINVAL;
-                        goto out;
+                        return -EINVAL;
 		}
 	}
-out:
+        return 0;
+}
+
+int send_request(struct connection *conn, struct Message *req) {
+        int rc = 0;
+
+        pthread_mutex_lock(&conn->mutex);
+        rc = send_msg(conn->fd, req);
         pthread_mutex_unlock(&conn->mutex);
         return rc;
 }
 
-int receive_response(struct connection *conn, struct Message *resp) {
+int receive_msg(int fd, struct Message *msg) {
 	void *buf;
 	int n;
 
         // There is only one thread reading the response, and socket is
         // full-duplex, so no need to lock
-	n = read_full(conn->fd, &resp->Seq, sizeof(resp->Seq));
-        if (n != sizeof(resp->Seq)) {
+	n = read_full(fd, &msg->Seq, sizeof(msg->Seq));
+        if (n != sizeof(msg->Seq)) {
                 fprintf(stderr, "fail to write seq");
 		return -EINVAL;
         }
-        n = read_full(conn->fd, &resp->Type, sizeof(resp->Type));
-        if (n != sizeof(resp->Type)) {
+        n = read_full(fd, &msg->Type, sizeof(msg->Type));
+        if (n != sizeof(msg->Type)) {
                 fprintf(stderr, "fail to read type");
 		return -EINVAL;
         }
-        n = read_full(conn->fd, &resp->Offset, sizeof(resp->Offset));
-        if (n != sizeof(resp->Offset)) {
+        n = read_full(fd, &msg->Offset, sizeof(msg->Offset));
+        if (n != sizeof(msg->Offset)) {
                 fprintf(stderr, "fail to read offset");
 		return -EINVAL;
         }
-        n = read_full(conn->fd, &resp->DataLength, sizeof(resp->DataLength));
-        if (n != sizeof(resp->DataLength)) {
+        n = read_full(fd, &msg->DataLength, sizeof(msg->DataLength));
+        if (n != sizeof(msg->DataLength)) {
                 fprintf(stderr, "fail to read datalength");
 		return -EINVAL;
         }
 
-	if (resp->Type != TypeResponse) {
+	if (msg->Type != TypeResponse) {
 		fprintf(stderr, "Invalid response received");
 		return -EINVAL;
 	}
 
         //printf("response: seq %d, type %d, offset %ld, length %d\n",
-                        //resp->Seq, resp->Type, resp->Offset, resp->DataLength);
+                        //msg->Seq, msg->Type, msg->Offset, msg->DataLength);
 
-	if (resp->DataLength > 0) {
-		resp->Data = malloc(resp->DataLength);
-                if (resp->Data == NULL) {
+	if (msg->DataLength > 0) {
+		msg->Data = malloc(msg->DataLength);
+                if (msg->Data == NULL) {
                         perror("cannot allocate memory for data");
                         return -EINVAL;
                 }
-		n = read_full(conn->fd, resp->Data, resp->DataLength);
-		if (n != resp->DataLength) {
+		n = read_full(fd, msg->Data, msg->DataLength);
+		if (n != msg->DataLength) {
                         fprintf(stderr, "Cannot read full from fd, %d vs %d\n",
-                                resp->DataLength, n);
-			free(resp->Data);
+                                msg->DataLength, n);
+			free(msg->Data);
 			return -EINVAL;
 		}
 	}
 	return 0;
+}
+
+int receive_response(struct connection *conn, struct Message *resp) {
+        int rc = 0;
+
+        rc = receive_msg(conn->fd, resp);
+        return rc;
 }
 
 void* response_process(void *arg) {
