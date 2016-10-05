@@ -8,6 +8,7 @@
 struct client_connection {
         int seq;  // must be atomic
         int fd;
+        int notify_fd;
 
         pthread_t response_thread;
 
@@ -16,7 +17,7 @@ struct client_connection {
 };
 
 struct client_connection *new_client_connection(char *socket_path);
-int free_client_connection(struct client_connection *conn);
+int shutdown_client_connection(struct client_connection *conn);
 
 int read_at(struct client_connection *conn, void *buf, size_t count, off_t offset);
 int write_at(struct client_connection *conn, void *buf, size_t count, off_t offset);

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <unistd.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -52,7 +53,8 @@ int server_dispatch_requests(struct server_connection *conn, struct Message *msg
         return rc;
 }
 
-int start_server(char *socket_path, struct handler_callbacks *cbs) {
+struct server_connection *new_server_connection(char *socket_path,
+                                                struct handler_callbacks *cbs) {
         struct sockaddr_un addr;
         int fd, connfd, rc = 0;
         struct server_connection *conn = NULL;
@@ -85,12 +87,17 @@ int start_server(char *socket_path, struct handler_callbacks *cbs) {
         conn->cbs = cbs;
         pthread_mutex_init(&conn->mutex, NULL);
 
+        return conn;
+}
+
+int start_server(struct server_connection *conn) {
+        int rc = 0;
         while (1) {
                 // msg will be freed after done processing
                 struct Message *msg = malloc(sizeof(struct Message));
 		bzero(msg, sizeof(struct Message));
 
-                rc = receive_msg(connfd, msg);
+                rc = receive_msg(conn->fd, msg);
 		if (rc < 0) {
 			fprintf(stderr, "Fail to receive request\n");
 			return rc;
@@ -101,4 +108,9 @@ int start_server(char *socket_path, struct handler_callbacks *cbs) {
 			return rc;
 		}
         }
+}
+
+void shutdown_server_connection(struct server_connection *conn) {
+        close(conn->fd);
+        free(conn);
 }

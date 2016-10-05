@@ -3,3 +3,6 @@ all:
 		longhorn-rpc-protocol.h longhorn-rpc-protocol.c \
 		longhorn-rpc-server.c longhorn-rpc-client.c \
 		-o rpc -lpthread -ggdb
+
+cscope:
+	find *.[ch] > cscope.files && cscope -b

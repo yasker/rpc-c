@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include <errno.h>
 #include <sys/mman.h>
@@ -16,6 +17,9 @@ const int request_count = 1;
 const size_t SAMPLE_SIZE = 100 * 1024 * 1024;
 
 static void *server_buf;
+
+static struct client_connection *client_conn;
+static struct server_connection *server_conn;
 
 int start_test(struct client_connection *conn, int request_size, int queue_depth) {
         int rc = 0;
@@ -113,6 +117,19 @@ static struct handler_callbacks cbs = {
         .write_at = server_write_at,
 };
 
+void signal_handler(int signo) {
+        if (signo == SIGINT) {
+                printf("SIGINT received, stop process\n");
+        }
+        if (client_conn != NULL) {
+                shutdown_client_connection(client_conn);
+        }
+        if (server_conn != NULL) {
+                shutdown_server_connection(server_conn);
+        }
+        exit(0);
+}
+
 int main(int argc, char *argv[])
 {
         int request_size = 4096;
@@ -120,7 +137,6 @@ int main(int argc, char *argv[])
         int queue_depth = 128;
         int client = 0;
 	int c, rc = 0;
-        struct client_connection *conn;
 
         while ((c = getopt(argc, argv, "r:q:s:c")) != -1) {
                 switch (c) {
@@ -149,17 +165,21 @@ int main(int argc, char *argv[])
 	printf("Socket %s, request %d, queue depth %d\n", socket_path,
 			request_size, queue_depth);
 
+        if (signal(SIGINT, signal_handler) == SIG_ERR) {
+                printf("Cannot catch signal, failed initialization\n");
+                exit(-1);
+        }
         if (client) {
-                conn = new_client_connection(socket_path);
-                if (conn == NULL) {
+                client_conn = new_client_connection(socket_path);
+                if (client_conn == NULL) {
                         fprintf(stderr, "cannot estibalish connection");
                 }
 
-                start_response_processing(conn);
+                start_response_processing(client_conn);
 
-                start_test(conn, request_size, queue_depth);
+                start_test(client_conn, request_size, queue_depth);
 
-                rc = pthread_join(conn->response_thread, NULL);
+                rc = pthread_join(client_conn->response_thread, NULL);
                 if (rc < 0) {
                         perror("Fail to wait for response thread to exit");
                 }
@@ -173,8 +193,9 @@ int main(int argc, char *argv[])
                 }
                 bzero(server_buf, SAMPLE_SIZE);
 
-                start_server(socket_path, &cbs);
+                server_conn = new_server_connection(socket_path, &cbs);
+
+                start_server(server_conn);
         }
         return 0;
 }
-

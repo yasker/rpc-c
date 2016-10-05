@@ -25,6 +25,8 @@ struct server_request {
         struct Message* msg;
 };
 
-int start_server(char *socket_path, struct handler_callbacks *cbs);
+struct server_connection *new_server_connection(char *socket_path, struct handler_callbacks *cbs);
+int start_server(struct server_connection *conn);
+void shutdown_server_connection(struct server_connection *conn);
 
 #endif

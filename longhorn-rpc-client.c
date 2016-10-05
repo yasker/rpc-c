@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <unistd.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -66,7 +67,7 @@ void* response_process(void *arg) {
         }
         free(resp);
         if (ret != 0) {
-                fprintf(stderr, "Fail to receive response");
+                fprintf(stderr, "Receive response returned error");
         }
 }
 
@@ -191,6 +192,7 @@ struct client_connection *new_client_connection(char *socket_path) {
         return conn;
 }
 
-int free_client_connection(struct client_connection *conn) {
+int shutdown_client_connection(struct client_connection *conn) {
+        close(conn->fd);
         free(conn);
 }
