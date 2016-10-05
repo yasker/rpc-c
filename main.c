@@ -28,7 +28,7 @@ int start_test(struct client_connection *conn, int request_size, int queue_depth
         char *buf;
         void *tmpbuf = malloc(request_size);
 
-        struct timespec start, read_stop, write_stop;
+        struct timespec write_start, write_stop, read_start, read_stop;
         uint32_t delta_write_ms, delta_read_ms;
         float write_bw, read_bw;
 
@@ -50,7 +50,7 @@ int start_test(struct client_connection *conn, int request_size, int queue_depth
 
         printf("Sample memory generated\n");
 
-        clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+        clock_gettime(CLOCK_MONOTONIC_RAW, &write_start);
         // We're going to write the whole thing to server(which store it in
         // memory), then read from it.
         for (i = 0; i < request_count; i ++) {
@@ -65,8 +65,12 @@ int start_test(struct client_connection *conn, int request_size, int queue_depth
         }
 
         clock_gettime(CLOCK_MONOTONIC_RAW, &write_stop);
-        printf("Write done\n");
+        delta_write_ms = (write_stop.tv_sec - write_start.tv_sec) * 1E3 + (write_stop.tv_nsec - write_start.tv_nsec) / 1E6;
+        write_bw = (SAMPLE_SIZE / 1024 / 1024) / (delta_write_ms / 1E3);
+        printf("Write done in %d ms\n", delta_write_ms);
+        printf("Write bandwidth is %.2f M/s\n", write_bw);
 
+        clock_gettime(CLOCK_MONOTONIC_RAW, &read_start);
         for (i = 0; i < request_count; i ++) {
                 int rc, offset = i * request_size;
 
@@ -82,14 +86,8 @@ int start_test(struct client_connection *conn, int request_size, int queue_depth
                 }
         }
         clock_gettime(CLOCK_MONOTONIC_RAW, &read_stop);
-        printf("Read done\n");
-
-        delta_write_ms = (write_stop.tv_sec - start.tv_sec) * 1E3 + (write_stop.tv_nsec - start.tv_nsec) / 1E6;
-        delta_read_ms = (read_stop.tv_sec - start.tv_sec) * 1E3 + (read_stop.tv_nsec - start.tv_nsec) / 1E6;
-        write_bw = (SAMPLE_SIZE / 1024 / 1024) / (delta_write_ms / 1E3);
+        delta_read_ms = (read_stop.tv_sec - read_start.tv_sec) * 1E3 + (read_stop.tv_nsec - read_start.tv_nsec) / 1E6;
         read_bw = (SAMPLE_SIZE / 1024 / 1024) / (delta_read_ms / 1E3);
-        printf("Write done in %d ms\n", delta_write_ms);
-        printf("Write bandwidth is %.2f M/s\n", write_bw);
         printf("Read done in %d ms\n", delta_read_ms);
         printf("Read bandwidth is %.2f M/s\n", read_bw);
 out:
