@@ -60,7 +60,7 @@ int start_test(struct client_connection *conn, int request_size, int queue_depth
                 rc = write_at(conn, buf + offset, request_size, offset);
                 if (rc < 0) {
                         fprintf(stderr, "Fail to complete write for %d\n", offset);
-                        return -EFAULT;
+                        goto out;
                 }
         }
 
@@ -70,17 +70,15 @@ int start_test(struct client_connection *conn, int request_size, int queue_depth
         for (i = 0; i < request_count; i ++) {
                 int rc, offset = i * request_size;
 
-                //printf("Read %d at %d\n", request_size, offset);
-
                 rc = read_at(conn, tmpbuf, request_size, offset);
                 if (rc < 0) {
                         fprintf(stderr, "Fail to complete read for %d\n", offset);
-                        return -EFAULT;
+                        goto out;
                 }
 
                 if (memcmp(tmpbuf, buf + offset, request_size) != 0) {
                         fprintf(stderr, "Inconsistency found at %d!\n", offset);
-                        return -EFAULT;
+                        goto out;
                 }
         }
         clock_gettime(CLOCK_MONOTONIC_RAW, &read_stop);
@@ -94,6 +92,10 @@ int start_test(struct client_connection *conn, int request_size, int queue_depth
         printf("Write bandwidth is %.2f M/s\n", write_bw);
         printf("Read done in %d ms\n", delta_read_ms);
         printf("Read bandwidth is %.2f M/s\n", read_bw);
+out:
+        free(tmpbuf);
+        munmap(buf, SAMPLE_SIZE);
+        return rc;
 }
 
 int server_read_at(void *buf, size_t count, off_t offset) {

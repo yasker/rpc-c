@@ -58,7 +58,8 @@ void* response_process(void *arg) {
                 pthread_mutex_unlock(&conn->mutex);
 
                 pthread_mutex_lock(&req->mutex);
-                req->Data = resp->Data;
+                memcpy(req->Data, resp->Data, req->DataLength);
+                free(resp->Data);
                 pthread_mutex_unlock(&req->mutex);
 
                 pthread_cond_signal(&req->cond);
@@ -97,7 +98,8 @@ int process_request(struct client_connection *conn, void *buf, size_t count, off
 
         if (type != TypeRead && type != TypeWrite) {
                 fprintf(stderr, "BUG: Invalid type for process_request %d\n", type);
-                return -EINVAL;
+                rc = -EFAULT;
+                goto free;
         }
         req->Seq = new_seq(conn);
         req->Type = type;
@@ -112,12 +114,14 @@ int process_request(struct client_connection *conn, void *buf, size_t count, off
         rc = pthread_cond_init(&req->cond, NULL);
         if (rc < 0) {
                 perror("Fail to init phread_cond");
-                return rc;
+                rc = -EFAULT;
+                goto free;
         }
         rc = pthread_mutex_init(&req->mutex, NULL);
         if (rc < 0) {
                 perror("Fail to init phread_mutex");
-                return rc;
+                rc = -EFAULT;
+                goto free;
         }
 
         pthread_mutex_lock(&conn->mutex);
@@ -131,12 +135,9 @@ int process_request(struct client_connection *conn, void *buf, size_t count, off
         }
 
         pthread_cond_wait(&req->cond, &req->mutex);
-
-        if (req->Type == TypeRead) {
-                memcpy(buf, req->Data, req->DataLength);
-        }
 out:
         pthread_mutex_unlock(&req->mutex);
+free:
         free(req);
         return rc;
 }

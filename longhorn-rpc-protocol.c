@@ -65,9 +65,12 @@ int send_msg(int fd, struct Message *msg) {
         return 0;
 }
 
+// Caller need to release msg->Data
 int receive_msg(int fd, struct Message *msg) {
 	void *buf;
 	int n;
+
+        bzero(msg, sizeof(struct Message));
 
         // There is only one thread reading the response, and socket is
         // full-duplex, so no need to lock
